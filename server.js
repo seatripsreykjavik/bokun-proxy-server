@@ -1,25 +1,24 @@
 // Filename: server.js
-// This is the complete, production-ready version of the Bokun proxy server.
-// It includes all necessary headers, error handling, and logic.
+// This version uses the corrected API endpoint with a query parameter.
 
-// --- Step 1: Import necessary packages ---
-// We use 'express' to create the server and 'node-fetch' to communicate with the Bokun API.
 const express = require('express');
 const fetch = require('node-fetch');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// --- Step 2: Configure your Bokun API credentials ---
-// IMPORTANT: Replace these placeholders with your actual keys from the Bokun dashboard.
-// Ensure the key has permissions to both read and write bookings.
-const BOKUN_ACCESS_KEY = process.env.BOKUN_ACCESS_KEY || '8737ae959dc542ccaae4308d4c1da80e';
-const BOKUN_SECRET_KEY = process.env.BOKUN_SECRET_KEY || 'cefc9857bf764046931ff73a6fe1514a';
+// --- Read API credentials from environment variables ---
+const BOKUN_ACCESS_KEY = process.env.8737ae959dc542ccaae4308d4c1da80e;
+const BOKUN_SECRET_KEY = process.env.cefc9857bf764046931ff73a6fe1514a;
 const BOKUN_API_URL = 'https://api.bokun.io';
 
-// --- Step 3: Set up CORS (Cross-Origin Resource Sharing) ---
-// This allows your kiosk webpage to securely make requests to this server.
+// --- Security Check: Ensure API keys are configured ---
+if (!BOKUN_ACCESS_KEY || !BOKUN_SECRET_KEY) {
+    console.error("FATAL ERROR: BOKUN_ACCESS_KEY or BOKUN_SECRET_KEY is not set in the environment.");
+    process.exit(1); // Stop the server if keys are missing
+}
+
+// --- Set up CORS (Cross-Origin Resource Sharing) ---
 app.use((req, res, next) => {
-    // List of URLs that are allowed to connect.
     const allowedOrigins = ['http://kiosk.seatripsreykjavik.com', 'http://localhost', 'http://127.0.0.1'];
     const origin = req.headers.origin;
     if (allowedOrigins.includes(origin)) {
@@ -29,8 +28,7 @@ app.use((req, res, next) => {
     next();
 });
 
-// --- Step 4: Define the main API endpoint ---
-// This is the heart of the server. It listens for requests from the kiosk.
+// --- Define the main API endpoint ---
 app.get('/api/booking/:bookingRef', async (req, res) => {
     const { bookingRef } = req.params;
 
@@ -39,27 +37,35 @@ app.get('/api/booking/:bookingRef', async (req, res) => {
     }
 
     try {
-        // --- Part A: Find the booking by its reference number ---
-        const findUrl = `${BOKUN_API_URL}/booking/find-by-reference/${bookingRef}`;
-        console.log(`\n1. Attempting to find booking: ${bookingRef}`);
+        // --- Part A: Find the booking using the correct GET endpoint with a query parameter ---
+        const findUrl = `${BOKUN_API_URL}/bookings?bookingRef=${bookingRef}`;
 
-        // These headers are critical for authenticating with the Bokun API.
+        console.log(`\n1. Attempting to find booking: ${bookingRef} via GET`);
+        
         const apiHeaders = {
-            'Accept': 'application/json', // We must ask for JSON data
-            'Content-Type': 'application/json',
+            'Accept': 'application/json',
             'X-Bokun-AccessKey': BOKUN_ACCESS_KEY,
             'X-Bokun-SecretKey': BOKUN_SECRET_KEY,
         };
 
-        const findResponse = await fetch(findUrl, { method: 'GET', headers: apiHeaders });
+        const findResponse = await fetch(findUrl, {
+            method: 'GET',
+            headers: apiHeaders,
+        });
 
-        // If the response is not "OK" (e.g., 404 Not Found, 403 Forbidden), stop here.
         if (!findResponse.ok) {
             console.error(`Error finding booking. Bokun API responded with Status: ${findResponse.status}`);
             return res.status(findResponse.status).json({ error: 'Booking not found or API key is invalid.' });
         }
+        
+        const searchResults = await findResponse.json();
 
-        const bookingDetails = await findResponse.json();
+        if (!searchResults || searchResults.length === 0) {
+            console.error(`   - Error: Booking reference ${bookingRef} not found in search results.`);
+            return res.status(404).json({ error: 'Booking not found.' });
+        }
+
+        const bookingDetails = searchResults[0];
         console.log(`   - Success: Found booking for ${bookingDetails.passengers[0].firstName} ${bookingDetails.passengers[0].lastName}`);
 
         // --- Part B: Mark all participants as "ARRIVED" ---
@@ -71,16 +77,17 @@ app.get('/api/booking/:bookingRef', async (req, res) => {
             status: "ARRIVED"
         };
         
+        const postApiHeaders = { ...apiHeaders, 'Content-Type': 'application/json' };
+        
         console.log(`2. Attempting to mark ${participantIds.length} participant(s) as ARRIVED...`);
         const updateResponse = await fetch(updateUrl, {
             method: 'POST',
-            headers: apiHeaders,
+            headers: postApiHeaders,
             body: JSON.stringify(updateBody)
         });
 
         if (!updateResponse.ok) {
             console.error(`   - Error: Could not update status. Bokun API responded with Status: ${updateResponse.status}`);
-            // We still continue and show the boarding pass, but log the error.
         } else {
             console.log(`   - Success: Participants marked as ARRIVED.`);
         }
@@ -107,7 +114,7 @@ app.get('/api/booking/:bookingRef', async (req, res) => {
     }
 });
 
-// --- Step 5: Start the server ---
+// --- Start the server ---
 app.listen(PORT, () => {
     console.log(`Bokun proxy server listening on port ${PORT}`);
     console.log('Ready to receive check-in requests...');
